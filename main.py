@@ -1,16 +1,10 @@
 import pygame
 import pygame.midi
-import pyaudio
+from array import array
 import numpy as np
 import threading
 import math
-from time import sleep
 from pygame.locals import *
-
-try:  # Ensure set available for output example
-    set
-except NameError:
-    from sets import Set as set
 
 note_names = ["C",
          "C#",
@@ -25,45 +19,45 @@ note_names = ["C",
          "A#",
          "H"]
 
-fs = 44100      # sampling rate, Hz, must be integer
-a4 = 440        #A4 tuning frequency
-buffer_size = 16000
-last_phase = {}
-buffer = (0*np.arange(buffer_size)).astype(np.float32)
+sample_rate = 44100  # sampling rate, Hz, must be integer
+a4 = 440             # A4 tuning frequency
+buffer_size = 512
+
+going = True
 
 keys = {}
 pitch_wheel = 64
 
+class Note(pygame.mixer.Sound): 
 
-def compute_buffer():
-    global last_phase
-    global buffer
-    temp_buffer = (0*np.arange(buffer_size)).astype(np.float32)
-    for i in range(1, len(keys)):
-        if(keys[i]['pressed']):
-            velocity = keys[i]['velocity'] / 127
-            frequency = keys[i]['frequency'] * (pitch_wheel / 64)
-            offset = (np.arcsin(last_phase[i]) / (2*np.pi)) * (1/frequency) * fs
-            samples = ((np.sin(2*np.pi*(np.arange(buffer_size)+offset)*frequency/fs)).astype(np.float32)) * velocity
-            last_phase[i] = samples[len(samples)-1]/velocity
-            temp_buffer = (np.add(samples, buffer) / 2)
-    buffer = temp_buffer
+    def __init__(self, frequency, volume=.1): 
+        self.frequency = frequency 
+        pygame.mixer.Sound.__init__(self, self.build_samples()) 
+        self.set_volume(volume) 
+
+    def build_samples(self): 
+        period = int(round(pygame.mixer.get_init()[0] / self.frequency)) 
+        samples = array("h", [0] * period) 
+        amplitude = 2 ** (abs(pygame.mixer.get_init()[1]) - 1) - 1 
+        for time in range(period): 
+            if time < period / 2: 
+                samples[time] = amplitude 
+            else: 
+                samples[time] = -amplitude 
+        return samples
+
+def init_mixer():
+    pygame.mixer.pre_init(sample_rate, -16, 1, buffer_size)
+    pygame.init()
+    screen = pygame.display.set_mode([1, 1], 0) 
 
 def generate_sound():
-    p = pyaudio.PyAudio()
-    stream = p.open(format=pyaudio.paFloat32,
-                channels=1,
-                rate=fs,
-                output=True)
-    
-    global last_phase
-    for i in range(0,144):
-        last_phase[i] = 0
-    
-    while True:
-        stream.write(buffer)
-        compute_thread = threading.Thread(target=compute_buffer)
-        compute_thread.start()
+    while going:
+        for i in range(0, len(keys)):
+            if(keys[i]['pressed']):
+                keys[i]['note'].play(-1)
+            else:
+                keys[i]['note'].stop()
 
 def init_keys():
     global keys
@@ -75,7 +69,7 @@ def init_keys():
         octave = math.floor(i / 12)
         frequency = a4*(2**(3/12)) *(2**((key+((octave-4)*12))/12))
         keys[i]['name'] = note_names[key] + "^" + str(octave)
-        keys[i]['frequency'] = frequency
+        keys[i]['note'] = Note(frequency)
 
 def print_device_info():
     pygame.midi.init()
@@ -105,13 +99,13 @@ def input_main(device_id = None):
     else:
         input_id = device_id
 
-    print ("using input_id :%s:" % input_id)
+    print ("Using input_id: %s" % input_id)
     i = pygame.midi.Input( input_id )
 
     global pressed_keys
     global pitch_wheel
+    global going
 
-    going = True
     while going:
         events = event_get()
         for e in events:
@@ -158,8 +152,18 @@ if __name__ == '__main__':
     except:
         device_id = None
 
+    init_mixer();
+        
     init_keys()
+
     audio_thread = threading.Thread(target=generate_sound)
     audio_thread.start()
-    
-    input_main(1)
+
+    try:
+        input_main(int(input("Which device do you want to use?")))
+    except KeyboardInterrupt:
+        pygame.quit()
+        print("Exiting..")
+    except:
+        pygame.quit()
+        print("There was an issue with the input device.")
